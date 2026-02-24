@@ -20,6 +20,7 @@ Examples:
   video2mp4 ./videos --batch               Convert all videos in folder
   video2mp4 ./videos --batch -o ./output   Convert to specific output folder
   video2mp4 input.mov --fps 60             Use 60 fps output
+  video2mp4 ./videos --batch --fallback-image poster.png  Use poster image when frame decode fails
         """
     )
     
@@ -61,6 +62,13 @@ Examples:
         type=str,
         default="aac",
         help="Audio codec (default: aac)"
+    )
+
+    parser.add_argument(
+        "--fallback-image",
+        type=str,
+        default=None,
+        help="Optional image used if a video frame cannot be decoded"
     )
     
     parser.add_argument(
@@ -112,6 +120,7 @@ Examples:
                 fps=args.fps,
                 codec=args.codec,
                 audio_codec=args.audio_codec,
+                fallback_image=args.fallback_image,
                 on_progress=log
             )
             
@@ -135,6 +144,7 @@ Examples:
                 fps=args.fps,
                 codec=args.codec,
                 audio_codec=args.audio_codec,
+                fallback_image=args.fallback_image,
                 on_progress=log
             )
             

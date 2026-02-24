@@ -1,109 +1,122 @@
 # video2mp4
 
-Convert videos to MP4 by extending a single frame to match the audio length. Perfect for fixing videos where the video track is corrupted or has fewer frames than the audio duration.
+Convert videos to MP4 by extending a single frame to match the audio length. This is useful when the video stream is damaged, has very low frame count, or has timing metadata that social platforms misread.
 
 ## The Problem
 
-Some video players and platforms (like **Instagram**, TikTok, and other social media apps) determine video duration by counting frames rather than reading audio length. When a video has:
+Some video players and platforms (like **Instagram**, TikTok, and other social media apps) determine playable length from frames instead of audio duration. When a file has:
 
-- **10 frames** at 0.45 FPS = **22 seconds of video**
+- **10 frames** at 0.45 FPS = about **22 seconds of video stream**
 - **22 seconds of audio**
 
-These platforms see only the frame count and calculate: `10 frames ÷ 30 fps = 0.33 seconds`
+Platforms may still calculate duration as `10 frames / 30 fps = 0.33 seconds`.
 
-**Result:** Your 22-second video gets trimmed to less than 1 second, cutting off most of the audio!
+**Result:** a multi-second clip can appear as less than one second and audio gets cut off.
 
 ### Why This Happens
 
-- Screen recordings or corrupted exports sometimes have very few keyframes
-- Variable frame rate (VFR) videos confuse frame counters
-- Some encoders prioritize audio over video frames
-- MOV/MP4 containers may have mismatched track durations
+- Screen recordings can have very few keyframes
+- Variable frame rate (VFR) metadata can confuse parsers
+- Corrupted/misaligned timestamps can break frame decode
+- Audio/video track durations can disagree in some containers
 
-### The Solution
+## The Solution
 
-**video2mp4** fixes this by:
+`video2mp4` rebuilds the video stream using one decodable frame and the original audio duration:
 
-1. Reading the actual audio duration (the true length)
-2. Taking a single frame from the video
-3. Extending that frame to match the full audio length
-4. Creating a proper 30 FPS video stream
+1. Read the true audio duration.
+2. Recover a usable frame from the source video.
+3. Extend that frame to full audio length.
+4. Export a standard MP4 stream at target FPS.
 
-**Benefits:**
-- ✅ Video duration now matches audio duration
-- ✅ Platforms correctly detect the full length
-- ✅ Minimal file size increase (single frame repeated, highly compressible)
-- ✅ Original audio preserved perfectly
-- ✅ Compatible with all social media platforms
+If frame recovery fails, it can use a custom fallback image or a generated black frame.
 
 ## Features
 
-- **Single Frame Extension**: Uses one frame from the video and extends it to match the full audio duration
-- **Preserves Audio**: Keeps the original audio track intact
-- **Batch Processing**: Convert entire folders of videos at once
-- **Multiple Formats**: Supports MP4, MOV, AVI, MKV, WMV, FLV, WebM
-- **Customizable**: Adjust FPS, codecs, and output settings
-- **CLI & Python API**: Use from command line or import as a module
+- **Single-Frame Rebuild**: Creates a valid MP4 stream from one frame + original audio
+- **Audio-Preserving**: Keeps original audio timing/content
+- **Multi-Step Frame Recovery**:
+  - MoviePy frame probes across candidate timestamps
+  - OpenCV fallback read
+  - ffmpeg single-frame extraction
+  - ffmpeg remux with `+genpts` and retry
+- **Fallback Poster Support**: `--fallback-image` when no source frame is decodable
+- **Batch Conversion**: Convert all supported videos in a folder
+- **Format Support**: `.mp4`, `.mov`, `.avi`, `.mkv`, `.wmv`, `.flv`, `.webm`
+- **CLI + Python API**
 
 ## Installation
 
 ### From Source
 
 ```bash
-# Clone or download the repository
 cd video2mp4
-
-# Install in development mode
 pip install -e .
-
-# Or install directly
+# or:
 pip install .
 ```
 
 ### Dependencies
 
+Required:
+
 - Python 3.9+
-- moviepy >= 2.0.0
-- FFmpeg (required by moviepy)
+- `moviepy>=2.0.0`
+- FFmpeg (installed on system or resolvable via `imageio-ffmpeg`)
+
+Optional helpers used automatically if installed:
+
+- `opencv-python` for frame extraction fallback
+- `Pillow` for `--fallback-image` loading/resizing
+- `imageio-ffmpeg` for ffmpeg binary resolution
 
 Install FFmpeg:
-- **Windows**: `winget install ffmpeg` or download from https://ffmpeg.org/
-- **macOS**: `brew install ffmpeg`
-- **Linux**: `sudo apt install ffmpeg` or equivalent
+
+- Windows: `winget install ffmpeg` or https://ffmpeg.org/
+- macOS: `brew install ffmpeg`
+- Linux: `sudo apt install ffmpeg` (or distro equivalent)
 
 ## CLI Usage
 
 ### Convert a Single File
 
 ```bash
-# Basic usage - creates input_converted_mov.mp4 in same directory
+# Writes input_converted_mov.mp4 next to input.mov
 video2mp4 input.mov
 
-# Specify output file
+# Custom output path
 video2mp4 input.mov -o output.mp4
 
 # Custom FPS
 video2mp4 input.mov --fps 60
+
+# Use poster if frame decode fails
+video2mp4 input.mov --fallback-image poster.png
 ```
 
 ### Batch Convert a Folder
 
 ```bash
-# Convert all videos in a folder (output to ./videos/output/)
+# Writes files to ./videos/output/
 video2mp4 ./videos --batch
 
-# Specify output folder
+# Custom output folder
 video2mp4 ./videos --batch -o ./converted
 
-# Only convert specific extensions
+# Custom extensions
 video2mp4 ./videos --batch -e ".mov,.mp4"
+
+# Poster fallback for entire batch
+video2mp4 ./videos --batch --fallback-image poster.png
 ```
 
 ### All CLI Options
 
-```
+```text
 usage: video2mp4 [-h] [-o OUTPUT] [-b] [--fps FPS] [--codec CODEC]
-                 [--audio-codec AUDIO_CODEC] [-e EXTENSIONS] [-v] [-q]
+                 [--audio-codec AUDIO_CODEC]
+                 [--fallback-image FALLBACK_IMAGE]
+                 [-e EXTENSIONS] [-v] [-q]
                  input
 
 positional arguments:
@@ -117,7 +130,10 @@ options:
   --codec CODEC         Video codec (default: libx264)
   --audio-codec AUDIO_CODEC
                         Audio codec (default: aac)
-  -e, --extensions      Comma-separated list of extensions (default: .mp4,.mov,.avi,.mkv,.wmv,.flv,.webm)
+  --fallback-image FALLBACK_IMAGE
+                        Optional image used if a video frame cannot be decoded
+  -e, --extensions      Comma-separated list of extensions
+                        (default: .mp4,.mov,.avi,.mkv,.wmv,.flv,.webm)
   -v, --version         Show version number and exit
   -q, --quiet           Suppress progress output
 ```
@@ -129,19 +145,18 @@ options:
 ```python
 from video2mp4 import convert_video
 
-# Basic usage
-output_path = convert_video("input.mov")
-print(f"Saved to: {output_path}")
-
-# With options
 output_path = convert_video(
     "input.mov",
     output_path="output.mp4",
-    fps=60,
+    fps=30,
     codec="libx264",
     audio_codec="aac",
-    on_progress=print  # Print progress messages
+    frame_index=0,
+    fallback_image="poster.png",
+    on_progress=print,
 )
+
+print(f"Saved to: {output_path}")
 ```
 
 ### Batch Convert Videos
@@ -149,18 +164,20 @@ output_path = convert_video(
 ```python
 from video2mp4 import convert_videos_in_folder
 
-# Convert all videos in a folder
 results = convert_videos_in_folder(
     "./videos",
     output_folder="./converted",
     extensions={".mov", ".mp4"},
     fps=30,
-    on_progress=print
+    codec="libx264",
+    audio_codec="aac",
+    fallback_image="poster.png",
+    on_progress=print,
 )
 
 print(f"Converted {len(results)} videos")
 for path in results:
-    print(f"  - {path}")
+    print(path)
 ```
 
 ### Function Reference
@@ -175,24 +192,26 @@ convert_video(
     codec: str = "libx264",
     audio_codec: str = "aac",
     frame_index: int = 0,
-    on_progress: Callable[[str], None] | None = None
+    fallback_image: str | Path | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> Path
 ```
 
-**Parameters:**
-- `input_path`: Path to the input video file
-- `output_path`: Output file path. If None, creates `{name}_converted_{ext}.mp4`
-- `fps`: Output frames per second (default: 30)
-- `codec`: Video codec (default: libx264)
-- `audio_codec`: Audio codec (default: aac)
-- `frame_index`: Which frame to use (default: 0 = first frame)
-- `on_progress`: Callback function for progress messages
+Parameters:
 
-**Returns:** Path to the output file
+- `input_path`: Input video path
+- `output_path`: Output file path (default: `{stem}_converted_{orig_ext}.mp4`)
+- `fps`: Output frames per second
+- `codec`: Video codec
+- `audio_codec`: Audio codec
+- `frame_index`: Preferred frame index to probe first
+- `fallback_image`: Optional image path used if no frame is decodable
+- `on_progress`: Optional progress callback
 
-**Raises:**
-- `FileNotFoundError`: If input file doesn't exist
-- `ValueError`: If video has no audio track
+Raises:
+
+- `FileNotFoundError`: Input does not exist
+- `ValueError`: Audio track missing/unreadable
 
 #### `convert_videos_in_folder()`
 
@@ -204,53 +223,55 @@ convert_videos_in_folder(
     fps: int = 30,
     codec: str = "libx264",
     audio_codec: str = "aac",
-    on_progress: Callable[[str], None] | None = None
+    fallback_image: str | Path | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> list[Path]
 ```
 
-**Parameters:**
-- `input_folder`: Path to folder containing input videos
-- `output_folder`: Output folder path. If None, creates `output` subfolder
-- `extensions`: Set of file extensions to process (default: common video extensions)
+Parameters:
+
+- `input_folder`: Folder containing videos
+- `output_folder`: Output folder (default: `{input_folder}/output`)
+- `extensions`: Set of file extensions to include
 - `fps`: Output frames per second
 - `codec`: Video codec
 - `audio_codec`: Audio codec
-- `on_progress`: Callback function for progress messages
+- `fallback_image`: Optional image path used when frame recovery fails
+- `on_progress`: Optional progress callback
 
-**Returns:** List of paths to converted files
+Returns:
+
+- List of converted output paths
 
 ## Examples
 
-### Fix Corrupted Video Files
+### Fix Corrupted Video With Audio Intact
 
 ```bash
-# Videos with missing frames but intact audio
 video2mp4 corrupted_video.mov -o fixed_video.mp4
-```
-
-### Create Still Image Videos from Audio
-
-```bash
-# Use first frame as a still image for the entire audio duration
-video2mp4 presentation.mov --fps 1
 ```
 
 ### Batch Process Screen Recordings
 
 ```bash
-# Convert all screen recordings
-video2mp4 ./recordings --batch -o ./processed -e ".mov"
+video2mp4 ./recordings --batch -o ./processed -e ".mov,.mp4"
+```
+
+### Force Poster Fallback
+
+```bash
+video2mp4 broken.mp4 --fallback-image poster.png
 ```
 
 ## How It Works
 
-1. **Load Video**: Opens the input video file using moviepy
-2. **Extract Audio**: Gets the audio track and its duration
-3. **Capture Frame**: Extracts a single frame (first frame by default)
-4. **Create Video**: Creates a new video with the frame extended to match audio duration
-5. **Merge Audio**: Combines the extended video with the original audio
-6. **Export**: Writes the final MP4 file with specified codec settings
+1. Load audio and measure true duration.
+2. Try decoding a frame from the video stream.
+3. Retry with fallback decoders/remux if needed.
+4. Choose recovered frame, fallback image, or black placeholder.
+5. Build constant-frame video clip for full audio duration.
+6. Attach original audio and export MP4.
 
 ## License
 
-MIT License - See LICENSE file for details.
+MIT License. See `LICENSE`.
